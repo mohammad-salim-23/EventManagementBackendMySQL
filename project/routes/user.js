@@ -26,11 +26,18 @@ router.post('/register',async(req , res)=>{
     const {name , email , password} = req.body;
     const hashed = await bcrypt.hash(password,10);
     try{
-       await pool.execute(
+      const result = await pool.execute(
         'INSERT INTO users (name, email , password) VALUES(?, ?, ?)',
         [name, email, hashed]
        );
-       res.send("User registered successfully");
+      res.json({
+        message:"User registered successfully",
+        user:{
+          id: result.insertId,
+          name,
+          email
+        }
+      })
     }catch(err){
         res.status(500).json(err.message);
     }

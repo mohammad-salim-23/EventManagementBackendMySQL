@@ -1,5 +1,5 @@
 import express from 'express';
-import pool from '../db.js';
+import pool from '../../db.js';
 import jwt from 'jsonwebtoken';
 
 const router = express.Router();
@@ -99,40 +99,77 @@ router.post('/', authenticate, async (req, res) => {
     const { title, description, date, time, location, image_url } = req.body;
 
     try {
-        await pool.execute(
+        // 1.insert statement
+        const [result] = await pool.execute(
             'INSERT INTO events (title, description, date, time, location, image_url, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
             [title, description, date, time, location, image_url, req.user.id]
         );
-        res.send('Event created successfully with image');
+
+        // 2. catch id for new event
+        const insertedId = result.insertId;
+
+        // 3. Read the inserted data from the database
+        const [rows] = await pool.execute('SELECT * FROM events WHERE id = ?', [insertedId]);
+
+        // 4. Send the data back in the response
+        res.status(201).json({
+            message: 'Event created successfully with image',
+            event: rows[0],
+        });
     } catch (err) {
         res.status(500).send(err.message);
     }
 });
 
-//  Update event
+// Update event (only creator can update)
 router.patch('/:id', authenticate, async (req, res) => {
     const { title, description, date, time, location, status, image_url } = req.body;
+    const eventId = req.params.id;
+    const userId = req.user.id;
 
     try {
+        // Check if event exists and belongs to user
+        const [eventRows] = await pool.execute('SELECT * FROM events WHERE id = ? AND created_by = ?', [eventId, userId]);
+        if (eventRows.length === 0) {
+            return res.status(403).send('You are not authorized to update this event');
+        }
+
         await pool.execute(
             'UPDATE events SET title=?, description=?, date=?, time=?, location=?, status=?, image_url=? WHERE id=? AND created_by=?',
-            [title, description, date, time, location, status, image_url, req.params.id, req.user.id]
+            [title, description, date, time, location, status, image_url, eventId, userId]
         );
-        res.send('Event updated successfully');
+
+        // Fetch updated event data
+        const [updatedRows] = await pool.execute('SELECT * FROM events WHERE id = ?', [eventId]);
+
+        res.json({
+            message: 'Event updated successfully',
+            event: updatedRows[0],
+        });
     } catch (err) {
         res.status(500).send(err.message);
     }
 });
 
-// Delete event
+// Delete event (only creator can delete)
 router.delete('/:id', authenticate, async (req, res) => {
+    const eventId = req.params.id;
+    const userId = req.user.id;
+
     try {
-        await pool.execute('DELETE FROM events WHERE id=? AND created_by=?', [req.params.id, req.user.id]);
-        res.send('Event deleted successfully');
+        // Check if event exists and belongs to user
+        const [eventRows] = await pool.execute('SELECT * FROM events WHERE id = ? AND created_by = ?', [eventId, userId]);
+        if (eventRows.length === 0) {
+            return res.status(403).send('You are not authorized to delete this event');
+        }
+
+        await pool.execute('DELETE FROM events WHERE id=? AND created_by=?', [eventId, userId]);
+        res.json({ message: 'Event deleted successfully' });
     } catch (err) {
         res.status(500).send(err.message);
     }
 });
+
 
 // Register for event
 router.post('/:id/register', authenticate, async (req, res) => {
@@ -149,13 +186,23 @@ router.post('/:id/register', authenticate, async (req, res) => {
     }
 });
 
-//  Get participants of an event
+// Get participants with name and email for an event (only creator can view)
 router.get('/:id/participants', authenticate, async (req, res) => {
     const eventId = req.params.id;
+    const userId = req.user.id;
 
     try {
+        // Verify that the requesting user is the creator of the event
+        const [eventRows] = await pool.execute('SELECT * FROM events WHERE id = ? AND created_by = ?', [eventId, userId]);
+        if (eventRows.length === 0) {
+            return res.status(403).send('You are not authorized to view participants of this event');
+        }
+
         const [rows] = await pool.execute(
-            'SELECT users.id, users.name, users.email FROM event_participants JOIN users ON event_participants.user_id = users.id WHERE event_participants.event_id = ?',
+            `SELECT users.id, users.name, users.email 
+             FROM event_participants 
+             JOIN users ON event_participants.user_id = users.id 
+             WHERE event_participants.event_id = ?`,
             [eventId]
         );
         res.json(rows);
